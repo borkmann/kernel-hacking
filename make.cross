@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# Written by Fengguang Wu <fengguang.wu@intel.com>
+#
+# $ARCH can be set in 4 ways: 
+# - make.x86_64
+# - make.cross ARCH=x86_64
+# - cd obj-x86_64; make.cross
+# - export ARCH=x86_64; make.cross
+#
+# run this if necessary on debian:
+#
+# apt-get install lftp xz-utils
+#
+# Usage:
+#  cd kernel/
+#  make.cross ARCH=xyz
+
+if [[ "$0" =~ make\.([a-z0-9_]+) && ! "$0" =~ 'make.cross' ]]; then
+        export ARCH="${BASH_REMATCH[1]}"
+elif [[ "$*" =~ ARCH=([a-z0-9_]+) ]]; then
+        export ARCH="${BASH_REMATCH[1]}"
+elif [[ ${PWD##*-} =~ ^(i386|x86_64|alpha|arm|arm64|avr32|blackfin|c6x|cris|frv|h8300|hexagon|ia64|m32r|m68k|microblaze|mips|mn10300|openrisc|parisc|powerpc|s390|score|sh|sh64|sparc|sparc32|sparc64|tile|tilepro|tilegx|um|unicore32|xtensa)$ ]]; then
+        export ARCH=${PWD##*-}
+elif [[ ! $ARCH ]]; then
+        export ARCH=x86_64
+fi
+
+download_crosstool()
+{
+        local URL=https://www.kernel.org/pub/tools/crosstool/files/bin
+        local list=/tmp/crosstool-files
+
+        [[ -s $list ]] || lftp -c "open $URL && find x86_64 > $list" || exit
+
+        file=$(grep "${crosstool}.*\.tar\.xz" $list | tail -1)
+        [[ $file ]] || {
+                echo "Cannot find $crosstool under $URL check $list"
+                exit 1
+        }
+
+        echo lftpget $URL/$file
+             lftpget $URL/$file
+
+        file=$(basename $file)
+        echo tar Jxf $file -C /usr/local
+        tar Jxf $file -C /usr/local --owner root --group root
+}
+
+setup_crosstool()
+{
+        case $ARCH in
+                i386|x86_64)
+                        crosstool=
+                        ;;
+                um)
+                        crosstool=
+                        ;;
+                arm)
+                        crosstool=arm-unknown-linux-gnueabi
+                        ;;
+                arm64)
+                        crosstool=aarch64-linux-gnu
+                        ;;
+                powerpc)
+                        crosstool=powerpc64-linux
+                        ;;
+                blackfin)
+                        crosstool=bfin-uclinux
+                        ;;
+                sh)
+                        crosstool=sh4-linux
+                        ;;
+                parisc)
+                        if grep -s -q 'CONFIG_64BIT=y' $SRC_ROOT/arch/parisc/configs/$config; then
+                                crosstool=hppa64-linux
+                        else
+                                crosstool=hppa-linux
+                        fi
+                        ;;
+                openrisc)
+                        crosstool=or32-linux
+                        ;;
+                s390)
+                        crosstool=s390x-linux
+                        ;;
+                tile|tilegx)
+                        crosstool=tilegx-linux
+                        ;;
+                mn10300)
+                        crosstool=am33_2.0-linux
+                        ;;
+                *)
+                        crosstool=$ARCH-linux
+                        ;;
+        esac
+
+        if [[ $crosstool ]]; then
+                gcc=(/usr/local/gcc-*-nolibc/${crosstool}/bin/${crosstool}-gcc)
+                [[ -x $gcc ]] || {
+                        download_crosstool
+                }
+
+                gcc=(/usr/local/gcc-*-nolibc/${crosstool}/bin/${crosstool}-gcc)
+                [[ -x $gcc ]] || {
+                        echo "No cross compiler for $ARCH"
+                        exit
+                }
+                opt_cross=CROSS_COMPILE=${gcc%gcc}
+        else
+                opt_cross=
+        fi
+}
+
+setup_crosstool
+
+if [ -d obj-$ARCH ]; then
+        export KBUILD_OUTPUT=obj-$ARCH
+        O=KBUILD_OUTPUT=obj-$ARCH
+fi
+
+[[ "$*" =~ '-j' ]] || {
+        nr_cpu=$(getconf _NPROCESSORS_CONF)
+        opt_jobs="-j $((nr_cpu * 2))"
+}
+
+[[ -f .make-env ]] && source ./.make-env
+
+if [[ -d source && -L source ]]; then
+        echo make -C source O=$PWD ARCH=$ARCH $opt_cross $subarch $opt_jobs "$@"
+        exec make -C source O=$PWD ARCH=$ARCH $opt_cross $subarch $opt_jobs "$@"
+else
+        echo make $O ARCH=$ARCH $opt_cross $subarch $opt_jobs "$@"
+        exec make $O ARCH=$ARCH $opt_cross $subarch $opt_jobs "$@"
+fi
